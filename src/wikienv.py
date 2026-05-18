@@ -44,6 +44,12 @@ class WikiEnv(gym.Env):
     self.observation_space = self.action_space = textSpace()
     self.search_time = 0
     self.num_searches = 0
+    # In-memory cache for Wikipedia search results — persists across env.reset()
+    # so that repeated queries (same iteration, same example, or across
+    # examples) hit the cache instead of triggering 429 rate-limits.
+    # Key: lowercased & stripped query string. Value: {"obs": str, "page": str}.
+    self._search_cache = {}
+    self._cache_hits = 0
     
   def _get_obs(self):
     return self.obs
@@ -132,6 +138,16 @@ class WikiEnv(gym.Env):
 
 
   def search_step(self, entity, _retry_depth=0):
+    # ---- Cache lookup ----
+    cache_key = (entity or "").strip().lower()
+    if cache_key and cache_key in self._search_cache:
+      cached = self._search_cache[cache_key]
+      self.obs = cached.get("obs", "")
+      self.page = cached.get("page", "") or self.page
+      self.lookup_keyword = self.lookup_list = self.lookup_cnt = None
+      self._cache_hits += 1
+      return
+
     entity_ = entity.replace(" ", "+")
     search_url = f"https://en.wikipedia.org/w/index.php?search={entity_}"
     old_time = time.time()
@@ -143,11 +159,19 @@ class WikiEnv(gym.Env):
       self.search_time += time.time() - old_time
       self.num_searches += 1
       self.obs = f"Wikipedia request failed ({type(e).__name__}) for '{entity}'."
+      # Cache transient failures briefly so the same bad query doesn't repeat
+      # within the same run.
+      if cache_key:
+        self._search_cache[cache_key] = {"obs": self.obs}
       return
     self.search_time += time.time() - old_time
     self.num_searches += 1
     if resp.status_code != 200:
       self.obs = f"Wikipedia returned HTTP {resp.status_code} for '{entity}'."
+      # Cache error responses (including 429) so the same query doesn't keep
+      # hammering Wikipedia and accumulating rate-limit hits.
+      if cache_key:
+        self._search_cache[cache_key] = {"obs": self.obs}
       return
     response_text = resp.text
     soup = BeautifulSoup(response_text, features="html.parser")
@@ -157,8 +181,9 @@ class WikiEnv(gym.Env):
       # Auto-retry with the top-ranked match (1 level deep) so the model
       # doesn't burn an iteration chasing the suggestion list.
       if _retry_depth < 1 and self.result_titles:
-        return self.search_step(self.result_titles[0], _retry_depth=_retry_depth + 1)
-      self.obs = f"Could not find {entity}. Similar: {self.result_titles[:5]}."
+        self.search_step(self.result_titles[0], _retry_depth=_retry_depth + 1)
+      else:
+        self.obs = f"Could not find {entity}. Similar: {self.result_titles[:5]}."
     else:
       page = [p.get_text().strip() for p in soup.find_all("p") + soup.find_all("ul")]
       if any("may refer to:" in p for p in page):
@@ -176,6 +201,14 @@ class WikiEnv(gym.Env):
               self.page += "\n"
         self.obs = self.get_page_obs(self.page)
         self.lookup_keyword = self.lookup_list = self.lookup_cnt = None
+
+    # Cache the final result for this entity (whether auto-retried or direct).
+    # Subsequent queries with the same entity name skip the HTTP request.
+    if cache_key:
+      self._search_cache[cache_key] = {
+        "obs": self.obs or "",
+        "page": self.page or "",
+      }
   
   def step(self, action):
     reward = 0

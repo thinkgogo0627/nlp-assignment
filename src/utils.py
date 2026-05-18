@@ -367,6 +367,11 @@ def compose_final_answer(intermediate_answers: List[Dict],
         yes_no = _comparison_yes_no(intermediate_answers)
         if yes_no is not None:
             return yes_no
+        # Python couldn't compute — typically because one intermediate is null.
+        # The LLM's preliminary is unreliable in this case (it tends to guess
+        # "yes"). If Reflector never approved, refuse to commit.
+        if not any(flag for _, flag in (reflector_flags or []) if flag):
+            return "Unknown"
 
     # 2. Bridge_comparison pattern: compare years/dates deterministically.
     if reasoning_pattern == "bridge_comparison":
@@ -375,6 +380,8 @@ def compose_final_answer(intermediate_answers: List[Dict],
         )
         if film:
             return film
+        if not any(flag for _, flag in (reflector_flags or []) if flag):
+            return "Unknown"
 
     candidates = []
 

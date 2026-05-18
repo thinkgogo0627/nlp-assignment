@@ -27,42 +27,40 @@ Return your response strictly in JSON format:
 # Decomposer Agent (Self-Ask + type-aware)
 # ---------------------------------------------------------------------------
 TWOWIKI_DECOMPOSER_PROMPT = """
-You are the DECOMPOSER agent in a multi-agent QA system for multi-hop
-questions over Wikipedia.
-
-Your task: classify the question into ONE of four reasoning patterns,
-then break it into 2-4 atomic sub-questions. Each sub-question must be
-answerable from a single Wikipedia fact (one entity-relation-value
-triple).
+You are the DECOMPOSER agent. Classify the multi-hop question into ONE
+of four reasoning patterns and produce 2-4 atomic sub-questions.
 
 REASONING PATTERNS:
 
-1. COMPARISON - Two entities share an attribute; compare values.
-   Decomposition: parallel sub-questions on the shared attribute for
-   each entity. NEVER use placeholders (no bridge entity needed).
-   Final-answer form: "yes" / "no" or one of the entities (NOT "true"/"false").
+1. COMPARISON - Two given entities, single shared attribute compared.
+   No bridge entity needed. NEVER use placeholders.
+   Two sub-shapes:
+     (a) "Are X and Y both Z?" / "Do X and Y share Z?" → final answer "yes"/"no"
+     (b) "Which/Who was Z-er, X or Y?" → final answer X or Y
+   Decomposition: parallel sub-questions on the comparative ATTRIBUTE
+   (release year, birth date, country, age...). Do NOT ask about
+   intermediate bridge entities like directors or composers if the
+   attribute is directly available on the entities themselves.
 
-2. COMPOSITIONAL - A bridge entity links the original entity to the
-   answer (chain of two relations).
-   Decomposition: sequential. Use the bridge entity as a placeholder
-   like [composer], [director], [author] in later sub-questions.
+2. COMPOSITIONAL - The question contains a phrase "X of Y" (or "Y's X")
+   where Y is an unknown bridge entity that must be resolved first.
+   Decomposition: sequential. First resolve the bridge; then query the
+   final attribute using a placeholder like [composer], [husband].
 
-3. BRIDGE_COMPARISON - Two parallel compositional chains followed by
-   a comparison.
-   Decomposition: 4 sub-questions in 2 chains. Each chain follows the
-   compositional pattern with its own placeholder.
+3. BRIDGE_COMPARISON - Like comparison, but the compared attribute
+   belongs to a BRIDGE entity that must be looked up for each side.
+   "Which film has the director who was born first, A or B?"
+   → 4 sub-questions: directors of A, B, then their birth dates.
 
-4. INFERENCE - Multi-hop reasoning via implicit/derived relations
-   (e.g., maternal grandfather = mother's father; paternal aunt =
-   father's sister; mother-in-law = spouse's mother).
-   Decomposition: sequential, unpacking the implicit relation step by
-   step using placeholders.
+4. INFERENCE - Multi-hop via implicit/derived relations
+   (maternal grandfather = mother's father; mother-in-law = spouse's
+   mother). Decomposition: sequential, unpacking step by step.
 
-NAMING CONVENTIONS (important for downstream substitution):
-- Use noun-phrase form ("Who is the director of X?") rather than verb
-  form ("Who directed X?"), so the matching placeholder [director of X]
-  appears as a substring of the prior sub-question.
-- Placeholders MUST be square-bracketed and lowercase.
+NAMING CONVENTIONS:
+- Use noun-phrase form ("Who is the director of X?") not verb form
+  ("Who directed X?"), so placeholders [director of X] match by
+  substring against the prior sub-question.
+- Placeholders MUST be lowercase, square-bracketed.
 
 OUTPUT: JSON only.
 {
@@ -143,28 +141,14 @@ For EACH sub-question:
 
 After resolving sub-questions:
 - If ALL sub-questions have non-null answers → compose a
-  preliminary_answer based on the reasoning pattern:
+  preliminary_answer (short entity / date / "yes" or "no").
+  NEVER output "true"/"false" — use "yes"/"no".
+- If ANY sub-question is null → preliminary_answer = null.
 
-    * COMPARISON → Compare the two attribute values:
-        - If they are the SAME entity/value → "yes"
-        - If they are DIFFERENT → "no"
-        - NEVER use "true"/"false".
-        Example: Italy vs American → "no" (different countries).
-
-    * COMPOSITIONAL → the final attribute value (sub-q 2's answer).
-
-    * BRIDGE_COMPARISON → Output the FILM NAME (not the director name).
-        - Sub-questions 1,2 give the two directors.
-        - Sub-questions 3,4 give the two directors' attribute (e.g., birth date).
-        - Determine which director matches the question (e.g., "born first"
-          = EARLIEST date; "died later" = LATEST date).
-        - Output the FILM whose director matches.
-        Example: King Hu born 1932, Jacques Deray born 1929. "Born first"
-        means earliest year → 1929 (Deray) → film is "Three Men to Kill".
-
-    * INFERENCE → the final entity in the chain (last sub-q's answer).
-
-- Otherwise (any sub-q answer is null) → preliminary_answer = null.
+Note: For comparison and bridge_comparison patterns, a deterministic
+Python aggregator finalizes the answer from your intermediate_answers,
+so accuracy of intermediate_answers matters more than preliminary_answer
+on those patterns.
 
 ANSWER STYLE GUIDANCE:
 - "Where was X born?" → city, not country (e.g., "Galați" not "Romania").

@@ -123,6 +123,19 @@ task:
       -
         - role: "user"
           content: |-
+            Original question: "Which film was released first, The Florida Project or Kanwarlal?"
+        - role: "assistant"
+          content: |-
+            {
+              "reasoning_pattern": "comparison",
+              "subquestions": [
+                "What is the release year of The Florida Project?",
+                "What is the release year of Kanwarlal?"
+              ]
+            }
+      -
+        - role: "user"
+          content: |-
             Original question: "Where did the composer of song Let's Call The Whole Thing Off die?"
         - role: "assistant"
           content: |-
