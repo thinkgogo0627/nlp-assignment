@@ -8,7 +8,7 @@ from openai import RateLimitError, APIError, APITimeoutError, APIConnectionError
 from .prompts import construct_message
 
 
-def _invoke_with_retry(llm, messages, max_retries: int = 6, base_delay: float = 10.0):
+def _invoke_with_retry(llm, messages, max_retries: int = 3, base_delay: float = 3.0):
     """Invoke an LLM with exponential backoff on rate limits / transient API errors.
 
     Honors OpenRouter's `retry_after_seconds` hint when present.
@@ -83,7 +83,12 @@ class BaseAgent(Agent):
             temperature=self.agent_config.get("temperature", 0.0),
             top_p=self.agent_config.get("top_p", 0.9),
             api_key=api_key,
-            timeout=300,
+            # Aggressive timeout — a single LLM call should never block the
+            # main loop for more than this. Combined with per-example timeout
+            # in run_2wikiqa.py, prevents the whole run from hanging on one
+            # stuck request.
+            timeout=45,
+            max_retries=0,  # disable langchain's internal retries; we do our own
             max_tokens=self.agent_config.get("max_new_tokens", 1000),
         )
         self.num_samples = self.agent_config.get("num_samples", 1)
