@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import random
+import signal
 import sys
 import time
 from datetime import datetime
@@ -14,6 +15,24 @@ import yaml
 # which can crash a long run on a single bad page. Defense in depth alongside
 # the broad except inside wikienv.search_step.
 sys.setrecursionlimit(5000)
+
+
+# ---------------------------------------------------------------------------
+# Per-example timeout (signal-based, works on Linux/WSL).
+# If a single example takes longer than PER_EXAMPLE_TIMEOUT_SEC seconds
+# (e.g., a hung LLM call exhausting backoff retries, or a Wikipedia request
+# stuck in pathological response parsing), it is interrupted and recorded as
+# "Unknown" so the run as a whole keeps progressing.
+# ---------------------------------------------------------------------------
+PER_EXAMPLE_TIMEOUT_SEC = 180  # 3 minutes per example
+
+
+class _ExampleTimeout(Exception):
+    """Raised when a single example exceeds PER_EXAMPLE_TIMEOUT_SEC."""
+
+
+def _timeout_handler(signum, frame):
+    raise _ExampleTimeout()
 
 from wikienv import WikiEnv
 from wrappers import TwoWikiQAWrapper, LoggingWrapper
@@ -474,17 +493,31 @@ def main():
     if n <= 0:
         raise ValueError("No examples to evaluate. Check --num_examples and dataset files.")
 
-    run_start = time.time()
+    run_start = time.monotonic()
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    timeouts = 0
 
     for idx in range(n):
-        ex_start = time.time()
+        ex_start = time.monotonic()
         _, info = env.reset(return_info=True, idx=idx)
         question = info["question"]
 
-        if args.mode == "single_agent":
-            pred = run_single_agent(question, single_agent, task_config)
-        else:
-            pred = run_multi_agent(question, multi_agents, task_config, env, args.mode)
+        timed_out = False
+        signal.alarm(PER_EXAMPLE_TIMEOUT_SEC)
+        try:
+            if args.mode == "single_agent":
+                pred = run_single_agent(question, single_agent, task_config)
+            else:
+                pred = run_multi_agent(question, multi_agents, task_config, env, args.mode)
+        except _ExampleTimeout:
+            timed_out = True
+            timeouts += 1
+            pred = {
+                "final_answer": "Unknown",
+                "error": f"per-example timeout ({PER_EXAMPLE_TIMEOUT_SEC}s)",
+            }
+        finally:
+            signal.alarm(0)
 
         action = f"finish[{pred['final_answer']}]"
         _, _, _, final_info = env.step(action)
@@ -497,18 +530,24 @@ def main():
             "em": final_info["em"],
             "f1": final_info["f1"],
             "details": pred,
+            "timed_out": timed_out,
         }
 
         results.append(result)
         total_em += float(final_info["em"])
         total_f1 += float(final_info["f1"])
 
-        ex_elapsed = time.time() - ex_start
-        run_elapsed = time.time() - run_start
+        ex_elapsed = max(0.0, time.monotonic() - ex_start)
+        run_elapsed = max(0.0, time.monotonic() - run_start)
         running_em = total_em / (idx + 1)
         running_f1 = total_f1 / (idx + 1)
         eta = (run_elapsed / (idx + 1)) * (n - idx - 1)
-        mark = "O" if final_info["em"] >= 0.99 else "X"
+        if timed_out:
+            mark = "T"
+        elif final_info["em"] >= 0.99:
+            mark = "O"
+        else:
+            mark = "X"
         print(
             f"[{idx + 1}/{n}] {mark} EM={final_info['em']:.0f} F1={final_info['f1']:.2f} "
             f"| run avg EM={running_em:.3f} F1={running_f1:.3f} "
@@ -516,6 +555,9 @@ def main():
             f"Q: {question[:60]}",
             flush=True,
         )
+
+    if timeouts:
+        print(f"\n[!] {timeouts}/{n} examples timed out (>{PER_EXAMPLE_TIMEOUT_SEC}s).", flush=True)
 
     env.write()
 

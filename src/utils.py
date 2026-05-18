@@ -244,6 +244,65 @@ def _bridge_comparison_pick(intermediate_answers: List[Dict],
     return None  # Unrecognized direction — defer to LLM preliminary
 
 
+_OR_PAIR_RE = re.compile(
+    r',\s*([^,]+?)\s+or\s+([^,?]+?)\??\s*$',
+    re.IGNORECASE,
+)
+
+
+def _extract_or_pair(question: str):
+    """Extract the two entities from '..., X or Y?' style questions."""
+    if not question:
+        return None
+    m = _OR_PAIR_RE.search(question.strip())
+    if not m:
+        return None
+    a = m.group(1).strip(" '\"")
+    b = m.group(2).strip(" '\"")
+    return (a, b) if a and b else None
+
+
+def _comparison_pick_entity(intermediate_answers: List[Dict],
+                            question: str) -> Optional[str]:
+    """For comparison-pattern questions that expect an ENTITY NAME (not yes/no)
+    as the answer, e.g.,
+        "Who was born later, Petko Voyvoda or Marcus Browne?"
+        "Which film was released first, X or Y?"
+    Compare the year-typed intermediate answers and return the matching entity.
+    Returns None if the question doesn't fit this shape or years can't be
+    extracted.
+    """
+    if len(intermediate_answers) < 2:
+        return None
+    pair = _extract_or_pair(question)
+    if not pair:
+        return None
+    ent_A, ent_B = pair
+
+    year_A = _extract_year(intermediate_answers[0].get("answer"))
+    year_B = _extract_year(intermediate_answers[1].get("answer"))
+    if year_A is None or year_B is None:
+        return None
+
+    q = question.lower()
+    earliest = ("born first", "born earlier", "born before", "older",
+                "died first", "died earlier", "died before",
+                "released first", "released earlier", "released before",
+                "came out first", "came out earlier",
+                "established first", "established earlier",
+                "founded first", "founded earlier")
+    latest = ("born later", "born last", "born most recent",
+              "died later", "died last", "lived longer",
+              "released later", "released last",
+              "younger")
+
+    if any(k in q for k in earliest):
+        return ent_A if year_A < year_B else ent_B
+    if any(k in q for k in latest):
+        return ent_A if year_A > year_B else ent_B
+    return None
+
+
 def _comparison_yes_no(intermediate_answers: List[Dict]) -> Optional[str]:
     """For comparison-pattern questions, deterministically derive yes/no
     from two intermediate answers.
@@ -297,9 +356,14 @@ def compose_final_answer(intermediate_answers: List[Dict],
       - `reflector_flags` is kept in the signature for forward compatibility
         (future ablations may prefer Reflector-approved iterations).
     """
-    # 1. Comparison pattern: trust the structured intermediate_answers
-    #    over the LLM's free-form preliminary_answer.
+    # 1. Comparison pattern. Two sub-shapes:
+    #    (a) "Who/Which was X-er, A or B?" → entity-pick (year comparison)
+    #    (b) "Are A and B the same/share Y?" → yes/no
+    #    Try entity-pick first; fall through to yes/no if not a pick question.
     if reasoning_pattern == "comparison":
+        entity = _comparison_pick_entity(intermediate_answers, question or "")
+        if entity:
+            return entity
         yes_no = _comparison_yes_no(intermediate_answers)
         if yes_no is not None:
             return yes_no
