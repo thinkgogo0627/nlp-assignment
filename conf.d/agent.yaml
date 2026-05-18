@@ -1,0 +1,13 @@
+agent_config:
+  model: "/home/kjy/nlp/models/Llama-3.2-3B-Instruct"
+  base_url: "http://165.132.142.56:8005/v1"
+  temperature: 0.0
+  top_p: 0.9
+  repetition_penalty: 1.0
+  max_new_tokens: 350
+  num_samples: 1
+  api_key: "EMPTY"
+
+# Other URL
+# students with last digit 0,2,4,6,8:
+# base_url: "http://165.132.142.56:8006/v1"

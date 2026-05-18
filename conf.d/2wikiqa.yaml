@@ -1,0 +1,283 @@
+task:
+  task_type: "2wiki_multihop_qa"
+
+  dataset:
+    name: "2WikiMultiHopQA"
+    split: "dev"
+    input_key: "question"
+    answer_key: "answer"
+    evidence_key: "supporting_facts"
+    max_examples: 200
+
+  problem_definition: >-
+    Solve multi-hop question answering problems using an LLM-based
+    multi-agent framework. The system must decompose each question,
+    gather or select supporting evidence, and generate the final answer.
+
+  requirements:
+    min_agents: 3
+    max_agents: 5
+    required_agents:
+      - "decomposer"
+    temperature: 0.0
+    save_intermediate_outputs: true
+
+  evaluation:
+    metrics:
+      - "exact_match"
+      - "f1"
+    private_test_set: true
+
+  baselines:
+    - name: "single_agent"
+      description: >-
+        A single LLM answers the question directly without explicit
+        decomposition or multi-agent collaboration.
+    - name: "multi_agent_without_structured_prompting"
+      description: >-
+        A multi-agent system that uses the same agent roles but does not
+        enforce structured outputs such as JSON, fixed sub-question lists,
+        or explicit evidence fields.
+
+  ablations:
+    - name: "without_decomposer"
+      description: >-
+        Remove the Decomposer Agent and directly retrieve evidence from
+        the original question.
+    - name: "without_reflector"
+      description: >-
+        Remove the Reflector Agent and the verification loop.
+    - name: "without_cot_prompting"
+      description: >-
+        Remove few-shot demonstrations from all agent prompts.
+
+  system_prompt: >-
+    You are a multi-hop question answering agent. Given a complex question,
+    solve it by decomposing the question into simpler sub-questions,
+    using supporting evidence, and producing a concise final answer.
+
+  agent_roles:
+    decomposer:
+      description: >-
+        Classify the question into a reasoning pattern and decompose it
+        into 2-4 atomic sub-questions (with placeholders for bridge entities).
+      output_format: |
+        {
+          "reasoning_pattern": "...",
+          "subquestions": ["...", "..."]
+        }
+    actor_query:
+      description: >-
+        Generate concise Wikipedia search queries for currently resolvable
+        sub-questions (skip those with unresolved placeholders).
+      output_format: |
+        {
+          "thought": "...",
+          "queries": ["...", "..."]
+        }
+    actor_answer:
+      description: >-
+        Read retrieved evidence and produce intermediate answers (or null
+        if unsupported), plus a preliminary final answer.
+      output_format: |
+        {
+          "thought": "...",
+          "intermediate_answers": [{"subquestion": "...", "answer": "...", "evidence_quote": "..."}],
+          "preliminary_answer": "..."
+        }
+    reflector:
+      description: >-
+        Verify evidence relevance (ISREL) and answer support (ISSUP) per
+        sub-question; emit binary `sufficient` flag and next-search guidance.
+      output_format: |
+        {
+          "sufficient": true,
+          "isrel": {"sub_q_1": true},
+          "issup": {"sub_q_1": true},
+          "feedback": "..."
+        }
+
+  # Few-shot examples are keyed by role. The scaffold's `build_task` looks
+  # up the appropriate role's examples and injects them as multi-turn
+  # user/assistant pairs. Setting this whole field to None disables few-shot
+  # globally (used by the `without_cot_prompting` ablation).
+  few_shot_examples:
+
+    # =========================================================================
+    # DECOMPOSER (4 examples — one per reasoning pattern)
+    # =========================================================================
+    decomposer:
+      -
+        - role: "user"
+          content: |-
+            Original question: "Are Danger!! Death Ray and The Unborn (1991 Film) from the same country?"
+        - role: "assistant"
+          content: |-
+            {
+              "reasoning_pattern": "comparison",
+              "subquestions": [
+                "What is the country of origin of Danger!! Death Ray?",
+                "What is the country of origin of The Unborn (1991 film)?"
+              ]
+            }
+      -
+        - role: "user"
+          content: |-
+            Original question: "Where did the composer of song Let's Call The Whole Thing Off die?"
+        - role: "assistant"
+          content: |-
+            {
+              "reasoning_pattern": "compositional",
+              "subquestions": [
+                "Who is the composer of 'Let's Call the Whole Thing Off'?",
+                "Where did [composer] die?"
+              ]
+            }
+      -
+        - role: "user"
+          content: |-
+            Original question: "Which film has the director who was born first, Legend Of The Mountain or Three Men To Kill?"
+        - role: "assistant"
+          content: |-
+            {
+              "reasoning_pattern": "bridge_comparison",
+              "subquestions": [
+                "Who is the director of Legend of the Mountain?",
+                "Who is the director of Three Men to Kill?",
+                "When was [director of Legend of the Mountain] born?",
+                "When was [director of Three Men to Kill] born?"
+              ]
+            }
+      -
+        - role: "user"
+          content: |-
+            Original question: "Who is Prince Hubertus Of Prussia's maternal grandfather?"
+        - role: "assistant"
+          content: |-
+            {
+              "reasoning_pattern": "inference",
+              "subquestions": [
+                "Who is the mother of Prince Hubertus of Prussia?",
+                "Who is the father of [mother of Prince Hubertus of Prussia]?"
+              ]
+            }
+
+    # =========================================================================
+    # ACTOR_QUERY (2 examples — entity-only queries; placeholder blocking
+    # + resuming after substitution)
+    # =========================================================================
+    actor_query:
+      -
+        - role: "user"
+          content: |-
+            Original question: "Where did the composer of Let's Call The Whole Thing Off die?"
+            Reasoning pattern: compositional
+            Sub-questions:
+              1. "Who is the composer of 'Let's Call the Whole Thing Off'?"
+              2. "Where did [composer] die?"
+            Prior evidence: (none)
+            Prior intermediate answers: (none)
+        - role: "assistant"
+          content: |-
+            {
+              "thought": "Bridge entity [composer] is unknown; fetch the song's page to find its composer.",
+              "queries": ["Let's Call the Whole Thing Off"]
+            }
+      -
+        - role: "user"
+          content: |-
+            Original question: "Who is Prince Hubertus Of Prussia's maternal grandfather?"
+            Reasoning pattern: inference
+            Sub-questions:
+              1. "Who is the mother of Prince Hubertus of Prussia?"
+              2. "Who is the father of Duchess Cecilie of Mecklenburg-Schwerin?"
+            Prior evidence: [Wiki on Prince Hubertus]
+            Prior intermediate answers:
+              - sub_q_1: "Duchess Cecilie of Mecklenburg-Schwerin"
+              - sub_q_2: null
+        - role: "assistant"
+          content: |-
+            {
+              "thought": "Placeholder resolved; fetch Duchess Cecilie's page to find her father.",
+              "queries": ["Duchess Cecilie of Mecklenburg-Schwerin"]
+            }
+
+    # =========================================================================
+    # ACTOR_ANSWER (2 examples — 1 partial (null handling) + 1 complete;
+    # reduced from 4 to fit max_model_len=2048)
+    # =========================================================================
+    actor_answer:
+      -
+        - role: "user"
+          content: |-
+            Original question: "Where did the composer of Let's Call The Whole Thing Off die?"
+            Reasoning pattern: compositional
+            Sub-questions:
+              1. "Who is the composer of 'Let's Call the Whole Thing Off'?"
+              2. "Where did [composer] die?"
+            Retrieved evidence:
+              - "Song written by George Gershwin and Ira Gershwin for the 1937 film Shall We Dance."
+        - role: "assistant"
+          content: |-
+            {
+              "thought": "Composer is George Gershwin. Place of death not in evidence.",
+              "intermediate_answers": [
+                {"subquestion": "Who is the composer of 'Let's Call the Whole Thing Off'?",
+                 "answer": "George Gershwin",
+                 "evidence_quote": "written by George Gershwin and Ira Gershwin"},
+                {"subquestion": "Where did [composer] die?",
+                 "answer": null,
+                 "evidence_quote": ""}
+              ],
+              "preliminary_answer": null
+            }
+      -
+        - role: "user"
+          content: |-
+            Original question: "Who is Prince Hubertus Of Prussia's maternal grandfather?"
+            Reasoning pattern: inference
+            Sub-questions:
+              1. "Who is the mother of Prince Hubertus of Prussia?"
+              2. "Who is the father of Duchess Cecilie of Mecklenburg-Schwerin?"
+            Retrieved evidence:
+              - "Prince Hubertus was a son of Crown Prince Wilhelm and Duchess Cecilie of Mecklenburg-Schwerin."
+              - "Duchess Cecilie was the daughter of Frederick Francis III, Grand Duke of Mecklenburg-Schwerin."
+        - role: "assistant"
+          content: |-
+            {
+              "thought": "Mother = Duchess Cecilie; her father = Frederick Francis III.",
+              "intermediate_answers": [
+                {"subquestion": "Who is the mother of Prince Hubertus of Prussia?",
+                 "answer": "Duchess Cecilie of Mecklenburg-Schwerin",
+                 "evidence_quote": "Duchess Cecilie of Mecklenburg-Schwerin"},
+                {"subquestion": "Who is the father of Duchess Cecilie of Mecklenburg-Schwerin?",
+                 "answer": "Frederick Francis III, Grand Duke of Mecklenburg-Schwerin",
+                 "evidence_quote": "daughter of Frederick Francis III, Grand Duke of Mecklenburg-Schwerin"}
+              ],
+              "preliminary_answer": "Frederick Francis III, Grand Duke of Mecklenburg-Schwerin"
+            }
+
+    # =========================================================================
+    # REFLECTOR (1 example — start with one, expand if needed)
+    # =========================================================================
+    reflector:
+      -
+        - role: "user"
+          content: |-
+            Original question: "Where did the composer of Let's Call The Whole Thing Off die?"
+            Sub-questions:
+              1. "Who is the composer of 'Let's Call the Whole Thing Off'?"
+              2. "Where did [composer] die?"
+            Retrieved evidence:
+              - "Let's Call the Whole Thing Off is a song written by George Gershwin and Ira Gershwin for the 1937 film Shall We Dance."
+            Actor's intermediate answers:
+              - sub_q_1 = "George Gershwin" (quote: "song written by George Gershwin and Ira Gershwin")
+              - sub_q_2 = null
+        - role: "assistant"
+          content: |-
+            {
+              "sufficient": false,
+              "isrel": {"sub_q_1": true, "sub_q_2": false},
+              "issup": {"sub_q_1": true, "sub_q_2": false},
+              "feedback": "Sub-question 2 unresolved: search for 'George Gershwin place of death' or 'George Gershwin died'."
+            }

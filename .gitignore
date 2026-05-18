@@ -1,0 +1,32 @@
+# Outputs & trajectories
+outputs/
+trajs/
+*.json.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Conda envs (created locally by setup.sh)
+envs/
+
+# macOS / Windows junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local secrets (if you ever paste real OpenRouter / OpenAI keys, gitignore them)
+# Keep `conf.d/agent.yaml` shareable by leaving api_key as "EMPTY".
+# If you'd rather use a local override pattern, uncomment:
+# conf.d/agent.local.yaml
