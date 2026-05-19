@@ -331,6 +331,67 @@ def _comparison_yes_no(intermediate_answers: List[Dict]) -> Optional[str]:
     return "no"
 
 
+def compose_final_answer_iterative(
+        history: List[Dict],
+        decomposer_final: Optional[str],
+        reasoning_pattern: Optional[str],
+        question: Optional[str]) -> str:
+    """Compose final answer from Self-Ask iterative history.
+
+    History format: list of dicts with keys
+      - followup_question, search_query, answer, evidence_quote,
+        reflector_sufficient (optional)
+
+    Selection priority:
+      1. Pattern-specific Python overrides (comparison/bridge_comparison)
+         using the intermediate answers extracted from history.
+      2. Decomposer's emitted final_answer (if any), yes/no-normalized.
+      3. Last non-null intermediate answer in history.
+      4. "Unknown".
+    """
+    # Build pseudo intermediate_answers list for compatibility with
+    # existing pattern-aware overrides.
+    intermediate_answers = []
+    for step in history:
+        intermediate_answers.append({
+            "subquestion": step.get("followup_question", ""),
+            "answer": step.get("answer"),
+            "evidence_quote": step.get("evidence_quote", ""),
+        })
+
+    if reasoning_pattern == "comparison":
+        entity = _comparison_pick_entity(intermediate_answers, question or "")
+        if entity:
+            return entity
+        yes_no = _comparison_yes_no(intermediate_answers)
+        if yes_no is not None:
+            return yes_no
+        if not any(step.get("reflector_sufficient") for step in history):
+            return "Unknown"
+
+    if reasoning_pattern == "bridge_comparison":
+        # Reuse existing bridge_comparison logic. Need subquestions list
+        # built from the history's follow-up questions.
+        subquestions = [s.get("followup_question", "") for s in history]
+        film = _bridge_comparison_pick(intermediate_answers, subquestions, question or "")
+        if film:
+            return film
+        if not any(step.get("reflector_sufficient") for step in history):
+            return "Unknown"
+
+    # Trust the Decomposer's emitted final_answer next.
+    if decomposer_final:
+        return _yesno_normalize(decomposer_final)
+
+    # Fallback: last non-null intermediate answer.
+    for step in reversed(history):
+        ans = step.get("answer")
+        if ans is not None:
+            return _yesno_normalize(str(ans))
+
+    return "Unknown"
+
+
 def compose_final_answer(intermediate_answers: List[Dict],
                          preliminary_answer: Optional[str],
                          reflector_flags: List[tuple],

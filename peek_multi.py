@@ -1,13 +1,12 @@
-"""Deep peek at multi-agent pipeline state.
+"""Deep peek at batched multi-agent pipeline state.
 
 Shows for each example:
-  - question / gold
-  - decomposition (subquestions + pattern)
+  - question / gold / pred / EM-F1
+  - decomposition (reasoning_pattern + subquestions)
   - retrieved evidence count
-  - intermediate answers
-  - preliminary answer
-  - reflector flags
-  - final answer
+  - intermediate_answers
+  - preliminary_answer + reflector_flags
+  - final_answer
   - raw agent outputs (truncated)
 
 Usage: python peek_multi.py [path] [example_idx]
@@ -29,12 +28,14 @@ if specific_idx is not None:
 
 for r in results:
     print("=" * 90)
-    print(f"[idx={r['idx']}] Q: {r['question']}")
+    mark = "O" if r["em"] >= 0.99 else ("T" if r.get("timed_out") else "X")
+    print(f"[idx={r['idx']}] {mark}  EM:{r['em']:.2f}  F1:{r['f1']:.2f}")
+    print(f"  Q: {r['question']}")
     print(f"  Gold: {r['gold_answer']!r}")
     print(f"  Pred: {r['prediction']!r}")
-    print(f"  EM: {r['em']:.2f}  F1: {r['f1']:.2f}")
 
     d = r.get("details", {})
+
     print(f"\n  --- DECOMPOSITION ---")
     print(f"  pattern: {d.get('reasoning_pattern')}")
     for i, sq in enumerate(d.get("decomposition", []), 1):

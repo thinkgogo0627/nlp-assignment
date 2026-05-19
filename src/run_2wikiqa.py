@@ -42,18 +42,19 @@ from utils import (
     extract_answer,
     substitute_placeholders,
     compose_final_answer,
+    compose_final_answer_iterative,
 )
 
 
 # Maximum Actor-Reflector iterations per question.
-# `without_reflection_loop` ablation can pin this to 1.
 MAX_ACTOR_REFLECTOR_ITERS = 2
 
 # How many characters of each Wikipedia observation to inject into the prompt.
 # 280 chars keeps the infobox header (Born/Died/Nationality) + first 1-2
-# sentences. Reduced from 400 to keep Actor_Answer worst-case input under
-# max_model_len=2048 when up to 8 evidence quotes accumulate across iterations.
-EVIDENCE_TRUNCATE_CHARS = 280
+# sentences. Bumped to 500 to surface film infobox "Release date" / "Country"
+# fields which typically sit around row 10-12. Person infoboxes had
+# Born/Died/Nationality visible at ~300 chars already.
+EVIDENCE_TRUNCATE_CHARS = 500
 
 
 # -----------------------------------------------------------------------------
@@ -75,9 +76,9 @@ EVIDENCE_TRUNCATE_CHARS = 280
 # Do not use more than 5 total agents including decomposer.
 # -----------------------------------------------------------------------------
 STUDENT_AGENT_ROLES = [
-    "actor_query",   # Phase 1: produce Wikipedia search queries (ReAct + IRCoT)
-    "actor_answer",  # Phase 2: derive intermediate answers from retrieved evidence
-    "reflector",     # Phase 3: Self-RAG-style ISREL/ISSUP verification
+    "actor_query",   # batched: emit Wikipedia search queries
+    "actor_answer",  # batched: read all evidence, emit intermediate_answers
+    "reflector",     # Self-RAG-style ISREL/ISSUP verification
 ]
 
 
@@ -252,11 +253,11 @@ def _build_reflector_context(question, subquestions, evidence, intermediate_answ
 
 
 def run_multi_agent(question, agents, task_config, env, mode="multi_agent_structured"):
-    """Phase 1 multi-agent pipeline.
+    """Batched multi-agent pipeline (rolled back from Self-Ask iterative).
 
     Architecture
     ------------
-      Decomposer (once)
+      Decomposer (once) — classify reasoning_pattern + emit all sub-questions
         ↓
       Loop up to MAX_ACTOR_REFLECTOR_ITERS:
         a) substitute_placeholders(sub-questions, prior intermediate answers)
@@ -266,14 +267,7 @@ def run_multi_agent(question, agents, task_config, env, mode="multi_agent_struct
         e) Reflector    → sufficient? + feedback
         f) break if sufficient=true OR Actor_Query returns no queries
         ↓
-      compose_final_answer (deterministic Python aggregator)
-
-    Ablation modes
-    --------------
-      `without_decomposer`        → skip Decomposer, treat original Q as the only sub-q.
-      `without_reflector`         → run a single Actor pass (no verification loop).
-      `multi_agent_without_structured_prompting` → all agents use the unstructured
-                                     prompt; outputs fall through to extract_answer fallback.
+      Python Composer (pattern-aware overrides + yes/no normalization)
     """
     disabled = set(ABLATION_DISABLED_AGENTS.get(mode, []))
 
@@ -311,10 +305,9 @@ def run_multi_agent(question, agents, task_config, env, mode="multi_agent_struct
     max_iter = 1 if "reflector" in disabled else MAX_ACTOR_REFLECTOR_ITERS
 
     for iteration in range(max_iter):
-        # 2a. Substitute placeholders using whatever has been resolved so far
         sq_resolved = substitute_placeholders(subquestions, intermediate_answers)
 
-        # 2b. Actor_Query
+        # 2a. Actor_Query
         aq_context = _build_actor_query_context(
             question, reasoning_pattern, sq_resolved,
             retrieved_evidence, intermediate_answers,
@@ -325,12 +318,12 @@ def run_multi_agent(question, agents, task_config, env, mode="multi_agent_struct
         aq_json = parse_json_response(aq_resp, default={})
         queries = get_queries(aq_json, [])
 
-        # 2c. Search Wikipedia (skip if no queries — nothing left to retrieve)
+        # 2b. Wikipedia search (cached)
         if queries:
             new_evidence = search_wikipedia(env, queries)
             retrieved_evidence.extend(new_evidence)
 
-        # 2d. Actor_Answer
+        # 2c. Actor_Answer
         aa_context = _build_actor_answer_context(
             question, reasoning_pattern, sq_resolved, retrieved_evidence,
         )
@@ -345,7 +338,7 @@ def run_multi_agent(question, agents, task_config, env, mode="multi_agent_struct
         if new_prelim:
             preliminary_answer = new_prelim
 
-        # 2e. Reflector
+        # 2d. Reflector
         sufficient = None
         if "reflector" not in disabled:
             rf_context = _build_reflector_context(
@@ -367,14 +360,12 @@ def run_multi_agent(question, agents, task_config, env, mode="multi_agent_struct
             "sufficient": sufficient,
         })
 
-        # 2f. Break conditions
         if sufficient is True:
             break
         if not queries and iteration > 0:
-            # Nothing more to search — further iterations won't help
             break
 
-    # -- Step 3: Compose final answer ------------------------------------------
+    # -- Step 3: Python Composer ----------------------------------------------
     final_answer = compose_final_answer(
         intermediate_answers=intermediate_answers,
         preliminary_answer=preliminary_answer,
@@ -384,10 +375,7 @@ def run_multi_agent(question, agents, task_config, env, mode="multi_agent_struct
         question=question,
     )
 
-    # Last-resort fallback: re-parse the latest Actor_Answer raw output and
-    # pull a usable value (preliminary_answer or last non-null intermediate).
-    # Avoid the previous extract_answer() fallback which looked for an "answer"
-    # key and dumped the entire JSON body when not found.
+    # Last-resort fallback
     if not final_answer or final_answer == "Unknown":
         for raw_resp in reversed(raw_outputs["actor_answer"]):
             if not raw_resp:
@@ -411,7 +399,7 @@ def run_multi_agent(question, agents, task_config, env, mode="multi_agent_struct
         "preliminary_answer": preliminary_answer,
         "reflector_flags": reflector_flags,
         "iteration_history": iteration_history,
-        "final_answer": final_answer,
+        "final_answer": final_answer or "Unknown",
         "raw_outputs": raw_outputs,
         "disabled_agents": sorted(disabled),
     }
