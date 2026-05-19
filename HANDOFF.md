@@ -76,18 +76,19 @@ Final Answer
 **산출물**:
 - `figure/framework.svg`, `framework.png` — 시스템 다이어그램 (보고서용)
 
+
+**Phase 1 마무리**:
+1. 10개 pilot 결과 분석 (실패 패턴 확인)
+2. 100개 full multi-agent run (메인 결과)
+
+
+
 ### 🟡 진행 중
 
 - 10개 example pilot 검증 (캐시 + entity-pick 적용 후)
 - 모든 4 타입에서 잘 작동하는지 확인
 
 ### ⬜ 남은 작업
-
-**Phase 1 마무리**:
-1. 10개 pilot 결과 분석 (실패 패턴 확인)
-2. 100개 full multi-agent run (메인 결과)
-3. Single-agent baseline 재실행 (새 yaml로 — generic few-shot 빠진 상태 반영)
-
 **Ablation 실험** (최소 2개, 권장 4개):
 - `without_decomposer` — Decomposition 효과 측정
 - `without_reflector` — Self-RAG 검증 효과 측정
