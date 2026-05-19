@@ -50,10 +50,10 @@ from utils import (
 MAX_ACTOR_REFLECTOR_ITERS = 2
 
 # How many characters of each Wikipedia observation to inject into the prompt.
-# 400 chars covers the infobox header (Born/Died/Nationality) + first 2-3
-# sentences. Slightly larger after we trimmed the Actor_Answer prompt's
-# composition walkthrough (which is now handled by the Python composer).
-EVIDENCE_TRUNCATE_CHARS = 400
+# 280 chars keeps the infobox header (Born/Died/Nationality) + first 1-2
+# sentences. Reduced from 400 to keep Actor_Answer worst-case input under
+# max_model_len=2048 when up to 8 evidence quotes accumulate across iterations.
+EVIDENCE_TRUNCATE_CHARS = 280
 
 
 # -----------------------------------------------------------------------------

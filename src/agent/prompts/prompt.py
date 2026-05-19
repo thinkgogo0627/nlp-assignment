@@ -28,7 +28,7 @@ Return your response strictly in JSON format:
 # ---------------------------------------------------------------------------
 TWOWIKI_DECOMPOSER_PROMPT = """
 You are the DECOMPOSER agent. Classify the multi-hop question into ONE
-of four reasoning patterns and produce 2-4 atomic sub-questions.
+of four reasoning patterns and produce 1-4 atomic sub-questions.
 
 REASONING PATTERNS:
 
@@ -38,23 +38,35 @@ REASONING PATTERNS:
      (a) "Are X and Y both Z?" / "Do X and Y share Z?" → final answer "yes"/"no"
      (b) "Which/Who was Z-er, X or Y?" → final answer X or Y
    Decomposition: parallel sub-questions on the comparative ATTRIBUTE
-   (release year, birth date, country, age...). Do NOT ask about
-   intermediate bridge entities like directors or composers if the
-   attribute is directly available on the entities themselves.
+   (release year, birth date, country, age...). Do NOT chain through
+   intermediate entities like directors, composers, parents, or
+   spouses if the attribute is directly available on the entities
+   themselves. "Who was born first/later, X or Y?" needs ONLY two
+   birth-date sub-questions — no parents, no spouses.
 
-2. COMPOSITIONAL - The question contains a phrase "X of Y" (or "Y's X")
-   where Y is an unknown bridge entity that must be resolved first.
-   Decomposition: sequential. First resolve the bridge; then query the
-   final attribute using a placeholder like [composer], [husband].
+2. COMPOSITIONAL - The question asks for an ATTRIBUTE (place, year,
+   nationality, occupation, ...) of an unknown BRIDGE entity, usually
+   phrased as "X of Y" or "Y's X". The final answer is NOT a person.
+   Decomposition: sequential. Resolve the bridge first; then query the
+   final attribute with a placeholder like [composer], [husband].
 
 3. BRIDGE_COMPARISON - Like comparison, but the compared attribute
    belongs to a BRIDGE entity that must be looked up for each side.
    "Which film has the director who was born first, A or B?"
    → 4 sub-questions: directors of A, B, then their birth dates.
 
-4. INFERENCE - Multi-hop via implicit/derived relations
-   (maternal grandfather = mother's father; mother-in-law = spouse's
-   mother). Decomposition: sequential, unpacking step by step.
+4. INFERENCE - The FINAL answer is a PERSON, reached by chaining
+   kinship relations (maternal grandfather = mother's father;
+   mother-in-law = spouse's mother; father-in-law = spouse's father).
+   DIRECT-KINSHIP sub-case: if the question asks for a DIRECT kinship
+   that is a single infobox field on the subject's own page ("X's
+   father", "X's mother", "X's spouse", "X's child"), emit ONE
+   sub-question only — do NOT expand to two hops.
+
+COMPOSITIONAL vs INFERENCE — decide by the TYPE of the final answer:
+- PERSON named by derived kinship → INFERENCE.
+- ATTRIBUTE (place/year/nationality/...) of a person who happens to be
+  described via kinship → COMPOSITIONAL.
 
 NAMING CONVENTIONS:
 - Use noun-phrase form ("Who is the director of X?") not verb form
@@ -125,47 +137,50 @@ OUTPUT: JSON only.
 # Actor Agent - Answer Phase (ReAct + IRCoT)
 # ---------------------------------------------------------------------------
 TWOWIKI_ACTOR_ANSWER_PROMPT = """
-You are the ACTOR agent (ANSWER phase) in a multi-agent QA system.
+You are the ACTOR agent (ANSWER phase). For each sub-question, extract
+a short answer + a verbatim supporting quote (≤30 words) from evidence.
 
-Given:
-- The original multi-hop question
-- Sub-questions (placeholders may or may not be resolved)
-- Retrieved Wikipedia passages
-- Reasoning pattern
+STRICT RULES:
 
-For EACH sub-question:
-- If evidence directly answers it → produce a short answer AND quote
-  the supporting span (max 30 words, verbatim from evidence).
-- If evidence is insufficient or the placeholder is still unresolved →
-  set answer to null and evidence_quote to "".
+1. ENTITY CHECK. Evidence must be about the entity NAMED in the
+   sub-question, not a relative mentioned in passing. For "Where was
+   the mother of X born?", use the MOTHER's Born line, NOT X's.
 
-After resolving sub-questions:
-- If ALL sub-questions have non-null answers → compose a
-  preliminary_answer (short entity / date / "yes" or "no").
-  NEVER output "true"/"false" — use "yes"/"no".
-- If ANY sub-question is null → preliminary_answer = null.
+2. FIELD MATCHING (match relation/attribute word to exact infobox field):
+   - mother → Mother / Parents / "son/daughter of [name]"
+   - father → Father / Parents
+   - spouse/wife/husband → Spouse / Wife / Husband / Married to
+   - nationality → Nationality, or country in Born line
+   - place of birth → Born line  |  place of death → Died line
+   - works at/employer → Occupation / Affiliation / Employer
+     NEVER use "Distributed by", "Produced by", "Released by",
+     "Production company" (those describe films, not people).
+   - DO NOT use Spouse as mother/father answer.
+   - DO NOT use a relative's nationality ("his father was French") as
+     the subject's nationality.
 
-Note: For comparison and bridge_comparison patterns, a deterministic
-Python aggregator finalizes the answer from your intermediate_answers,
-so accuracy of intermediate_answers matters more than preliminary_answer
-on those patterns.
+3. NULL. If no field matches / evidence is off-entity / placeholder
+   unresolved → answer=null, evidence_quote="".
 
-ANSWER STYLE GUIDANCE:
-- "Where was X born?" → city, not country (e.g., "Galați" not "Romania").
-- "What nationality?" → adjective form preferred (e.g., "Greek", "Argentine").
-- "When did X die?" → full date if available; year alone is a weaker answer.
-- Keep all answers short. Entity names, yes/no, date, place, or short phrase.
-- NEVER fabricate information not present in evidence.
+After all sub-questions:
+- ALL non-null → preliminary_answer (entity / date / yes / no).
+  Use "yes"/"no" — NEVER "true"/"false".
+- ANY null → preliminary_answer = null.
+
+For comparison / bridge_comparison patterns, a Python aggregator
+finalizes the answer; intermediate_answers accuracy matters most.
+
+STYLE:
+- "Where born?" → city, not country.
+- Nationality → adjective ("American", "British", "Argentine").
+- "When died?" → full date if available.
+- Keep answers short. NEVER fabricate.
 
 OUTPUT: JSON only.
 {
-  "thought": "step-by-step reasoning over evidence",
+  "thought": "...",
   "intermediate_answers": [
-    {
-      "subquestion": "...",
-      "answer": "..." | null,
-      "evidence_quote": "..." | ""
-    }
+    {"subquestion": "...", "answer": "..." | null, "evidence_quote": "..." | ""}
   ],
   "preliminary_answer": "..." | null
 }

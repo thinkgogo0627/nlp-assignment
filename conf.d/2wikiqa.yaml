@@ -174,6 +174,31 @@ task:
                 "Who is the father of [mother of Prince Hubertus of Prussia]?"
               ]
             }
+      -
+        - role: "user"
+          content: |-
+            Original question: "Who is Mary Shelley's father?"
+        - role: "assistant"
+          content: |-
+            {
+              "reasoning_pattern": "inference",
+              "subquestions": [
+                "Who is the father of Mary Shelley?"
+              ]
+            }
+      -
+        - role: "user"
+          content: |-
+            Original question: "Where was the mother of Queen Victoria born?"
+        - role: "assistant"
+          content: |-
+            {
+              "reasoning_pattern": "compositional",
+              "subquestions": [
+                "Who is the mother of Queen Victoria?",
+                "Where was [mother of Queen Victoria] born?"
+              ]
+            }
 
     # =========================================================================
     # ACTOR_QUERY (2 examples — entity-only queries; placeholder blocking
@@ -216,58 +241,52 @@ task:
             }
 
     # =========================================================================
-    # ACTOR_ANSWER (2 examples — 1 partial (null handling) + 1 complete;
-    # reduced from 4 to fit max_model_len=2048)
+    # ACTOR_ANSWER (2 compact examples: 1 partial null + 1 complete kinship)
     # =========================================================================
     actor_answer:
       -
         - role: "user"
           content: |-
-            Original question: "Where did the composer of Let's Call The Whole Thing Off die?"
-            Reasoning pattern: compositional
+            Question: "Where did the composer of Let's Call The Whole Thing Off die?"
+            Pattern: compositional
             Sub-questions:
               1. "Who is the composer of 'Let's Call the Whole Thing Off'?"
               2. "Where did [composer] die?"
-            Retrieved evidence:
+            Evidence:
               - "Song written by George Gershwin and Ira Gershwin for the 1937 film Shall We Dance."
         - role: "assistant"
           content: |-
             {
-              "thought": "Composer is George Gershwin. Place of death not in evidence.",
+              "thought": "Composer = Gershwin; death place absent.",
               "intermediate_answers": [
                 {"subquestion": "Who is the composer of 'Let's Call the Whole Thing Off'?",
-                 "answer": "George Gershwin",
-                 "evidence_quote": "written by George Gershwin and Ira Gershwin"},
-                {"subquestion": "Where did [composer] die?",
-                 "answer": null,
-                 "evidence_quote": ""}
+                 "answer": "George Gershwin", "evidence_quote": "written by George Gershwin"},
+                {"subquestion": "Where did [composer] die?", "answer": null, "evidence_quote": ""}
               ],
               "preliminary_answer": null
             }
       -
         - role: "user"
           content: |-
-            Original question: "Who is Prince Hubertus Of Prussia's maternal grandfather?"
-            Reasoning pattern: inference
+            Question: "Who is Prince Hubertus's maternal grandfather?"
+            Pattern: inference
             Sub-questions:
-              1. "Who is the mother of Prince Hubertus of Prussia?"
-              2. "Who is the father of Duchess Cecilie of Mecklenburg-Schwerin?"
-            Retrieved evidence:
-              - "Prince Hubertus was a son of Crown Prince Wilhelm and Duchess Cecilie of Mecklenburg-Schwerin."
-              - "Duchess Cecilie was the daughter of Frederick Francis III, Grand Duke of Mecklenburg-Schwerin."
+              1. "Who is the mother of Prince Hubertus?"
+              2. "Who is the father of Duchess Cecilie?"
+            Evidence:
+              - "Hubertus was a son of Crown Prince Wilhelm and Duchess Cecilie."
+              - "Cecilie was the daughter of Frederick Francis III."
         - role: "assistant"
           content: |-
             {
-              "thought": "Mother = Duchess Cecilie; her father = Frederick Francis III.",
+              "thought": "Mother=Cecilie; her father=Frederick Francis III.",
               "intermediate_answers": [
-                {"subquestion": "Who is the mother of Prince Hubertus of Prussia?",
-                 "answer": "Duchess Cecilie of Mecklenburg-Schwerin",
-                 "evidence_quote": "Duchess Cecilie of Mecklenburg-Schwerin"},
-                {"subquestion": "Who is the father of Duchess Cecilie of Mecklenburg-Schwerin?",
-                 "answer": "Frederick Francis III, Grand Duke of Mecklenburg-Schwerin",
-                 "evidence_quote": "daughter of Frederick Francis III, Grand Duke of Mecklenburg-Schwerin"}
+                {"subquestion": "Who is the mother of Prince Hubertus?",
+                 "answer": "Duchess Cecilie", "evidence_quote": "son of Crown Prince Wilhelm and Duchess Cecilie"},
+                {"subquestion": "Who is the father of Duchess Cecilie?",
+                 "answer": "Frederick Francis III", "evidence_quote": "daughter of Frederick Francis III"}
               ],
-              "preliminary_answer": "Frederick Francis III, Grand Duke of Mecklenburg-Schwerin"
+              "preliminary_answer": "Frederick Francis III"
             }
 
     # =========================================================================
